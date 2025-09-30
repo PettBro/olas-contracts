@@ -31,6 +31,12 @@ const config: HardhatUserConfig = {
 			type: "edr-simulated",
 			chainType: "op",
 		},
+		baseMainnet: {
+			type: "http",
+			chainType: "op",
+			url: "https://base-mainnet.g.alchemy.com/v2/WBTUuCNn4NJKPbfgtLAyS",
+			accounts: [configVariable("BASE_MAINNET_PRIVATE_KEY")],
+		},
 		sepolia: {
 			type: "http",
 			chainType: "l1",

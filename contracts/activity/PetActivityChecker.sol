@@ -7,6 +7,8 @@ import {IActionRepository} from "../interfaces/IActionRepository.sol";
 error ZeroAddress();
 /// @dev Numeric parameter must be greater than zero.
 error ZeroValue();
+/// @dev Operation restricted to the contract owner.
+error NotOwner();
 
 /// @title PetActivityChecker
 /// @notice Helper contract for staking setups that validates agent activity using an actions repository.
@@ -15,24 +17,39 @@ contract PetActivityChecker {
     uint256 private constant ONE = 1e18;
     uint256 private constant THIRTY_DAYS_SECONDS = 2592000;
 
+    /// @notice Current contract owner.
+    address public owner;
     /// @notice Repository that stores the counted actions per agent.
     IActionRepository public immutable actionRepository;
     /// @notice Minimum actions per second requirement expressed with 18 decimals precision.
-    uint256 public immutable livenessRatio;
-    /// @notice Optional minimum number of actions that must be executed within every checkpoint window.
-    uint256 public immutable minActionsPerPeriod;
-    /// @notice Optional upper bound on idle time since the last action (0 disables the check).
-    uint256 public immutable maxInactivity;
+    uint256 public livenessRatio;
+
+    /// @notice Emitted whenever contract ownership changes.
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+    /// @notice Emitted when the liveness ratio is updated.
+    event LivenessRatioUpdated(
+        uint256 indexed oldRatio,
+        uint256 indexed newRatio
+    );
+
+    /// @notice Ensures that only the owner can call a function.
+    modifier onlyOwner() {
+        if (msg.sender != owner) {
+            revert NotOwner();
+        }
+        _;
+    }
 
     /// @param repository Address of the actions repository contract.
     /// @param _livenessRatio Minimum actions per second represented with 18 decimals.
-    /// @param _minActionsPerPeriod Minimum absolute action count required per checkpoint window (0 disables).
-    /// @param _maxInactivity Maximum acceptable idle seconds since the last action (0 disables the check).
+    /// @param _owner Address of the contract owner.
     constructor(
         address repository,
         uint256 _livenessRatio,
-        uint256 _minActionsPerPeriod,
-        uint256 _maxInactivity
+        address _owner
     ) {
         if (repository == address(0)) {
             revert ZeroAddress();
@@ -40,10 +57,13 @@ contract PetActivityChecker {
         if (_livenessRatio == 0) {
             revert ZeroValue();
         }
+        if (_owner == address(0)) {
+            revert ZeroAddress();
+        }
         actionRepository = IActionRepository(repository);
         livenessRatio = _livenessRatio;
-        minActionsPerPeriod = _minActionsPerPeriod;
-        maxInactivity = _maxInactivity;
+        owner = _owner;
+        emit OwnershipTransferred(address(0), _owner);
     }
 
     /// @notice Returns activity metrics for a specific agent that will be cached by the staking contract.
@@ -97,23 +117,9 @@ contract PetActivityChecker {
 
         uint256 diff = currentCount - previousCount;
 
-        if (minActionsPerPeriod > 0 && diff < minActionsPerPeriod) {
-            return false;
-        }
-
         uint256 ratio = (diff * ONE) / ts;
         if (ratio < livenessRatio) {
             return false;
-        }
-
-        if (maxInactivity > 0) {
-            uint256 lastActionTs = curNonces[1];
-            if (lastActionTs == 0) {
-                return false;
-            }
-            if (block.timestamp - lastActionTs > maxInactivity) {
-                return false;
-            }
         }
 
         ratioPass = true;
@@ -128,14 +134,25 @@ contract PetActivityChecker {
         return (livenessRatio * periodSeconds) / ONE;
     }
 
-    /// @notice Function to change the liveness ratio (only callable by owner in future implementation)
-    /// @dev This function is currently incomplete and would need access control; Not sure if we want to add it in the actions repo contract tho
-    /// @param newLivenessRatio New minimum actions per second requirement
-    function changeLivenessRatio(uint256 newLivenessRatio) external {
-        // TODO: Add access control (e.g., onlyOwner modifier)
-        // TODO: Add validation for newLivenessRatio > 0
-        // TODO: Emit event for the change
-        // For now, this is a placeholder that would need proper implementation
-        revert("Function not yet implemented");
+    /// @notice Transfers contract ownership to a new address.
+    /// @param newOwner Address of the new owner.
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) {
+            revert ZeroAddress();
+        }
+        address previousOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previousOwner, newOwner);
+    }
+
+    /// @notice Updates the liveness ratio requirement.
+    /// @param newLivenessRatio New minimum actions per second requirement.
+    function changeLivenessRatio(uint256 newLivenessRatio) external onlyOwner {
+        if (newLivenessRatio == 0) {
+            revert ZeroValue();
+        }
+        uint256 oldRatio = livenessRatio;
+        livenessRatio = newLivenessRatio;
+        emit LivenessRatioUpdated(oldRatio, newLivenessRatio);
     }
 }

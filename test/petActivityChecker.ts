@@ -3,7 +3,7 @@ import { network } from "hardhat";
 import { padHex, stringToHex } from "viem";
 import { describe, it } from "node:test";
 
-const { viem, networkHelpers } = await network.connect();
+const { viem } = await network.connect();
 
 describe("Pet staking flow", function () {
 	const WALK = padHex(stringToHex("walk"), { size: 32 });
@@ -19,12 +19,10 @@ describe("Pet staking flow", function () {
 		});
 
 		const livenessRatio = 5n * 10n ** 17n; // 0.5 actions per second
-		const minActionsPerPeriod = 3n;
-		const maxInactivity = 0n; // disabled
 
-		const activityChecker = await viem.deployContract("PetActivityChecker", [actionRepository.address, livenessRatio, minActionsPerPeriod, maxInactivity], {});
+		const activityChecker = await viem.deployContract("PetActivityChecker", [actionRepository.address, livenessRatio, owner.account.address], {});
 
-		return { actionRepository, activityChecker, owner, agent, recorder, livenessRatio, minActionsPerPeriod };
+		return { actionRepository, activityChecker, owner, agent, recorder, livenessRatio };
 	}
 
 	it("tracks per-action counters and totals", async function () {
@@ -68,11 +66,11 @@ describe("Pet staking flow", function () {
 		expect(await activityChecker.read.isRatioPass([curNonces, stillFailingLast, stillFailingTs])).to.equal(false);
 
 		const betterLastNonces = [curNonces[0] - 6n, curNonces[1] - 12n, 1n];
-		const betterTs = 12n; // diff = 6 actions / 12 seconds = 0.5 -> meets ratio and minimum actions
+		const betterTs = 12n; // diff = 6 actions / 12 seconds = 0.5 -> meets ratio requirement
 		expect(await activityChecker.read.isRatioPass([curNonces, betterLastNonces, betterTs])).to.equal(true);
 	});
 
-	it("fails the ratio check when activity flag is false or agent idle", async function () {
+	it("fails the ratio check when agent inactive or throughput too low", async function () {
 		const { actionRepository, activityChecker, owner, agent } = await deployFixture();
 
 		await actionRepository.write.recordAction([agent.account.address, WALK, 4n], { account: owner.account });
@@ -82,24 +80,21 @@ describe("Pet staking flow", function () {
 			account: agent.account,
 		});
 
-		let curNonces = await activityChecker.read.getMultisigNonces([agent.account.address]);
+		const curNonces = await activityChecker.read.getMultisigNonces([agent.account.address]);
 		const refLastNonces = [curNonces[0] - 4n, curNonces[1] - 8n, 0n];
 		expect(await activityChecker.read.isRatioPass([curNonces, refLastNonces, 8n])).to.equal(false);
 
-		// Reactivate and advance time enough to violate inactivity limit by redeploying with maxInactivity
-		const maxInactivity = 5n;
-		const newChecker = await viem.deployContract("PetActivityChecker", [actionRepository.address, 10n ** 17n, 1n, maxInactivity], {});
-
+		// Reactivate with no additional actions -> ratio fails due to zero or negative delta
 		await actionRepository.write.setAgentStatus([agent.account.address, true], {
 			account: owner.account,
 		});
+		const inactiveLast = [curNonces[0], curNonces[1], 1n];
+		expect(await activityChecker.read.isRatioPass([curNonces, inactiveLast, 8n])).to.equal(false);
 
-		await networkHelpers.time.increase(Number(maxInactivity + 1n));
-
-		curNonces = await newChecker.read.getMultisigNonces([agent.account.address]);
-		const lastNonces = [curNonces[0] - 1n, curNonces[1] - (maxInactivity + 1n), 1n];
-
-		expect(await newChecker.read.isRatioPass([curNonces, lastNonces, maxInactivity + 1n])).to.equal(false);
+		// Small positive delta but overly long window keeps ratio below threshold
+		const limitedLast = [curNonces[0] - 1n, curNonces[1] - 8n, 1n];
+		const longWindow = 20n; // 1 action across 20 seconds < 0.5 actions/sec
+		expect(await activityChecker.read.isRatioPass([curNonces, limitedLast, longWindow])).to.equal(false);
 	});
 
 	it("computes required actions for a period", async function () {
