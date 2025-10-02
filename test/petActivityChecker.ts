@@ -55,17 +55,17 @@ describe("Pet staking flow", function () {
 		await actionRepository.write.recordAction([agent.account.address, WALK, 6n], { account: owner.account });
 
 		const curNonces = await activityChecker.read.getMultisigNonces([agent.account.address]);
-		const lastNonces = [curNonces[0] - 4n, curNonces[1] - 12n, 1n];
+		const lastNonces = [curNonces[0] - 4n, 1n];
 		const ts = 12n;
 
 		// diff = 4 actions in 12 seconds -> 0.333 actions/sec < 0.5 requirement
 		expect(await activityChecker.read.isRatioPass([curNonces, lastNonces, ts])).to.equal(false);
 
-		const stillFailingLast = [curNonces[0] - 2n, curNonces[1] - 10n, 1n];
+		const stillFailingLast = [curNonces[0] - 2n, 1n];
 		const stillFailingTs = 10n; // diff = 2 actions in 10 seconds -> 0.2 actions/sec < 0.5
 		expect(await activityChecker.read.isRatioPass([curNonces, stillFailingLast, stillFailingTs])).to.equal(false);
 
-		const betterLastNonces = [curNonces[0] - 6n, curNonces[1] - 12n, 1n];
+		const betterLastNonces = [curNonces[0] - 6n, 1n];
 		const betterTs = 12n; // diff = 6 actions / 12 seconds = 0.5 -> meets ratio requirement
 		expect(await activityChecker.read.isRatioPass([curNonces, betterLastNonces, betterTs])).to.equal(true);
 	});
@@ -81,18 +81,18 @@ describe("Pet staking flow", function () {
 		});
 
 		const curNonces = await activityChecker.read.getMultisigNonces([agent.account.address]);
-		const refLastNonces = [curNonces[0] - 4n, curNonces[1] - 8n, 0n];
+		const refLastNonces = [curNonces[0] - 4n, 0n];
 		expect(await activityChecker.read.isRatioPass([curNonces, refLastNonces, 8n])).to.equal(false);
 
 		// Reactivate with no additional actions -> ratio fails due to zero or negative delta
 		await actionRepository.write.setAgentStatus([agent.account.address, true], {
 			account: owner.account,
 		});
-		const inactiveLast = [curNonces[0], curNonces[1], 1n];
+		const inactiveLast = [curNonces[0], 1n];
 		expect(await activityChecker.read.isRatioPass([curNonces, inactiveLast, 8n])).to.equal(false);
 
 		// Small positive delta but overly long window keeps ratio below threshold
-		const limitedLast = [curNonces[0] - 1n, curNonces[1] - 8n, 1n];
+		const limitedLast = [curNonces[0] - 1n, 1n];
 		const longWindow = 20n; // 1 action across 20 seconds < 0.5 actions/sec
 		expect(await activityChecker.read.isRatioPass([curNonces, limitedLast, longWindow])).to.equal(false);
 	});

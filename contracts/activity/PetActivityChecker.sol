@@ -67,16 +67,15 @@ contract PetActivityChecker {
     }
 
     /// @notice Returns activity metrics for a specific agent that will be cached by the staking contract.
-    /// @dev Layout: [0] -> total actions, [1] -> last action timestamp, [2] -> active status flag (1 / 0).
+    /// @dev Layout: [0] -> total actions, [1] -> active status flag (1 / 0).
     /// @param agent Address of the agent being queried.
     /// @return nonces Structured array of activity metrics aligned with the staking helper interface.
     function getMultisigNonces(
         address agent
     ) external view returns (uint256[] memory nonces) {
-        nonces = new uint256[](3);
+        nonces = new uint256[](2);
         nonces[0] = actionRepository.totalActions(agent);
-        nonces[1] = actionRepository.lastActionTimestamp(agent);
-        nonces[2] = actionRepository.isAgentActive(agent) ? 1 : 0;
+        nonces[1] = actionRepository.isAgentActive(agent) ? 1 : 0;
     }
 
     /// @notice Determines whether the agent activity threshold has been satisfied within the observed window.
@@ -90,12 +89,12 @@ contract PetActivityChecker {
         uint256[] memory lastNonces,
         uint256 ts
     ) external view returns (bool ratioPass) {
-        if (curNonces.length != lastNonces.length || curNonces.length < 3) {
+        if (curNonces.length != lastNonces.length || curNonces.length < 2) {
             return false;
         }
 
-        // Active flag is stored at index 2.
-        if (curNonces[2] == 0) {
+        // Active flag is stored at index 1.
+        if (curNonces[1] == 0) {
             return false;
         }
 
