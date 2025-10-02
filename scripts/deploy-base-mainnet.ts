@@ -18,7 +18,6 @@ function validateEnvironmentVariables(): void {
 				`  BASE_MAINNET_PRIVATE_KEY - Private key for Base mainnet deployment\n\n` +
 				`Optional variables:\n` +
 				`  ACTION_REPOSITORY_OWNER - Owner address for ActionRepository (defaults to deployer)\n` +
-				`  ACTION_REPOSITORY_RECORDERS - Comma-separated list of recorder addresses\n` +
 				`  PET_ACTIVITY_CHECKER_OWNER - Owner address for PetActivityChecker (defaults to deployer)`
 		);
 	}
@@ -64,13 +63,6 @@ function resolveAddress(raw: string | undefined, fallback: Address, label: strin
 	if (!raw) {
 		return fallback;
 	}
-	if (!isAddress(raw)) {
-		throw new Error(`Invalid ${label} address provided: ${raw}`);
-	}
-	return raw as Address;
-}
-
-function requireAddress(raw: string, label: string): Address {
 	if (!isAddress(raw)) {
 		throw new Error(`Invalid ${label} address provided: ${raw}`);
 	}
@@ -123,26 +115,6 @@ async function deployContracts() {
 		});
 		console.log("✅ ActionRepository deployed at", actionRepository.address);
 
-		// Set up recorders if specified
-		const recordersEnv = process.env.ACTION_REPOSITORY_RECORDERS;
-		let recorders: string[] = [];
-		if (recordersEnv) {
-			recorders = recordersEnv
-				.split(",")
-				.map((entry) => entry.trim())
-				.filter(Boolean);
-
-			console.log(`Setting up ${recorders.length} recorder(s)...`);
-			for (const recorder of recorders) {
-				const recorderAddress = requireAddress(recorder, "ACTION_REPOSITORY_RECORDERS entry");
-				console.log("Granting recorder permissions to", recorderAddress);
-				await actionRepository.write.setRecorder([recorderAddress, true], {
-					account: deployer.account,
-				});
-			}
-			console.log("✅ All recorders configured");
-		}
-
 		const livenessRatio = parseBigIntEnv("PET_LIVENESS_RATIO");
 
 		// Set deployer as the default owner of PetActivityChecker
@@ -168,9 +140,6 @@ async function deployContracts() {
 		console.log(`🔍 PetActivityChecker: ${activityChecker.address}`);
 		console.log(`👑 PetActivityChecker owner: ${petActivityCheckerOwner}`);
 		console.log(`⚡ Liveness ratio: ${livenessRatio.toString()}`);
-		if (recordersEnv && recorders.length > 0) {
-			console.log(`🎯 Recorders configured: ${recorders.length}`);
-		}
 		console.log("=".repeat(50));
 		console.log("✅ All contracts deployed and configured successfully!");
 	} catch (error) {

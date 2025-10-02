@@ -10,19 +10,15 @@ describe("Pet staking flow", function () {
 	const FEED = padHex(stringToHex("feed"), { size: 32 });
 
 	async function deployFixture() {
-		const [owner, agent, recorder] = await viem.getWalletClients();
+		const [owner, agent] = await viem.getWalletClients();
 
 		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address], {});
-
-		await actionRepository.write.setRecorder([recorder.account.address, true], {
-			account: owner.account,
-		});
 
 		const livenessRatio = 5n * 10n ** 17n; // 0.5 actions per second
 
 		const activityChecker = await viem.deployContract("PetActivityChecker", [actionRepository.address, livenessRatio, owner.account.address], {});
 
-		return { actionRepository, activityChecker, owner, agent, recorder, livenessRatio };
+		return { actionRepository, activityChecker, owner, agent, livenessRatio };
 	}
 
 	it("tracks per-action counters and totals", async function () {
@@ -40,10 +36,10 @@ describe("Pet staking flow", function () {
 		expect(total).to.equal(3n);
 	});
 
-	it("allows authorized recorders to batch update action counts", async function () {
-		const { actionRepository, agent, recorder } = await deployFixture();
+	it("allows the owner to batch update action counts", async function () {
+		const { actionRepository, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordActionsBatch([agent.account.address, [WALK, FEED], [3n, 2n]], { account: recorder.account });
+		await actionRepository.write.recordActionsBatch([agent.account.address, [WALK, FEED], [3n, 2n]], { account: owner.account });
 
 		const totals = await actionRepository.read.totalActions([agent.account.address]);
 		expect(totals).to.equal(5n);

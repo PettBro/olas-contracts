@@ -19,8 +19,6 @@ error ArrayLengthMismatch();
 contract ActionRepository is IActionRepository {
     /// @notice Current contract owner.
     address public owner;
-    /// @notice Authorized callers that can record actions on behalf of agents.
-    mapping(address => bool) public recorders;
 
     /// @dev Per agent per action type counters.
     mapping(address => mapping(bytes32 => uint256)) private _actionCounts;
@@ -33,8 +31,6 @@ contract ActionRepository is IActionRepository {
 
     /// @notice Emitted whenever contract ownership changes.
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    /// @notice Emitted when recorder permissions are updated.
-    event RecorderUpdated(address indexed recorder, bool allowed);
     /// @notice Emitted when an agent action is recorded.
     event ActionRecorded(
         address indexed recorder,
@@ -55,24 +51,22 @@ contract ActionRepository is IActionRepository {
         _;
     }
 
-    /// @notice Reverts when the caller is neither the target agent nor an authorized recorder.
+    /// @notice Reverts when the caller is neither the target agent nor the owner.
     /// @param agent Address of the agent the call relates to.
-    modifier onlyRecorderOrAgent(address agent) {
-        if (msg.sender != agent && !recorders[msg.sender]) {
+    modifier onlyOwnerOrAgent(address agent) {
+        if (msg.sender != agent && msg.sender != owner) {
             revert NotAuthorized();
         }
         _;
     }
 
-    /// @param admin Initial owner address that also gains recorder permissions.
+    /// @param admin Initial owner address.
     constructor(address admin) {
         if (admin == address(0)) {
             revert ZeroAddress();
         }
         owner = admin;
-        recorders[admin] = true;
         emit OwnershipTransferred(address(0), admin);
-        emit RecorderUpdated(admin, true);
     }
 
     /// @notice Transfers contract ownership to a new address.
@@ -83,26 +77,13 @@ contract ActionRepository is IActionRepository {
         }
         address previousOwner = owner;
         owner = newOwner;
-        recorders[newOwner] = true;
         emit OwnershipTransferred(previousOwner, newOwner);
-        emit RecorderUpdated(newOwner, true);
-    }
-
-    /// @notice Grants or revokes recorder permissions for a given address.
-    /// @param recorder Address of the recorder.
-    /// @param allowed Whether the recorder is allowed to write.
-    function setRecorder(address recorder, bool allowed) external onlyOwner {
-        if (recorder == address(0)) {
-            revert ZeroAddress();
-        }
-        recorders[recorder] = allowed;
-        emit RecorderUpdated(recorder, allowed);
     }
 
     /// @notice Updates the active status flag for an agent.
     /// @param agent Address of the agent.
     /// @param active New active status indicator.
-    function setAgentStatus(address agent, bool active) external onlyRecorderOrAgent(agent) {
+    function setAgentStatus(address agent, bool active) external onlyOwnerOrAgent(agent) {
         if (agent == address(0)) {
             revert ZeroAddress();
         }
@@ -117,7 +98,7 @@ contract ActionRepository is IActionRepository {
     /// @return newActionCount Updated counter for the action type.
     function recordAction(address agent, bytes32 actionType, uint256 amount)
         public
-        onlyRecorderOrAgent(agent)
+        onlyOwnerOrAgent(agent)
         returns (uint256 newActionCount)
     {
         if (agent == address(0)) {
@@ -153,7 +134,7 @@ contract ActionRepository is IActionRepository {
     /// @return totalAdded Sum of increments applied across all action types.
     function recordActionsBatch(address agent, bytes32[] calldata actionTypes, uint256[] calldata amounts)
         external
-        onlyRecorderOrAgent(agent)
+        onlyOwnerOrAgent(agent)
         returns (uint256 totalAdded)
     {
         if (agent == address(0)) {
