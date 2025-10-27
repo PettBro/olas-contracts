@@ -252,15 +252,10 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
         bytes32 r,
         bytes32 s
     ) external returns (uint256 newActionCount) {
-        // Check if nonce has been used
-        if (_actionNoncesUsed[nonce]) {
-            revert NonceAlreadyUsed();
-        }
-
         // Verify signature
         address recoveredSigner = verifyAction(
             actionId,
-            nonce,
+            _useNonce(nonce), // Mark nonce as used
             timestamp,
             v,
             r,
@@ -270,10 +265,7 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
             revert InvalidSignature();
         }
 
-        // Mark nonce as used
-        _actionNoncesUsed[nonce] = true;
-
-        // Convert actionId to bytes32 for storage
+        // Convert uint8 actionId to bytes32 for storage
         bytes32 actionType = bytes32(uint256(actionId));
 
         // Record the action
@@ -312,5 +304,14 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
             updatedTotal
         );
         return updatedActionCount;
+    }
+
+    function _useNonce(bytes32 nonce) private returns (bytes32) {
+        if (_actionNoncesUsed[nonce]) {
+            revert NonceAlreadyUsed();
+        }
+
+        _actionNoncesUsed[nonce] = true;
+        return nonce;
     }
 }
