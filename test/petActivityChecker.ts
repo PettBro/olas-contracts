@@ -22,14 +22,14 @@ describe("Pet staking flow", function () {
 	}
 
 	it("tracks per-action counters and totals", async function () {
-		const { actionRepository, owner, agent } = await deployFixture();
+		const { actionRepository, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordAction([agent.account.address, WALK, 2n], { account: owner.account });
-		await actionRepository.write.recordAction([agent.account.address, FEED, 1n], { account: owner.account });
+		await actionRepository.write.recordAction([WALK, 2n], { account: owner.account });
+		await actionRepository.write.recordAction([FEED, 1n], { account: owner.account });
 
-		const walkCount = await actionRepository.read.actionCount([agent.account.address, WALK]);
-		const feedCount = await actionRepository.read.actionCount([agent.account.address, FEED]);
-		const total = await actionRepository.read.totalActions([agent.account.address]);
+		const walkCount = await actionRepository.read.actionCount([owner.account.address, WALK]);
+		const feedCount = await actionRepository.read.actionCount([owner.account.address, FEED]);
+		const total = await actionRepository.read.totalActions([owner.account.address]);
 
 		expect(walkCount).to.equal(2n);
 		expect(feedCount).to.equal(1n);
@@ -39,18 +39,24 @@ describe("Pet staking flow", function () {
 	it("allows the owner to batch update action counts", async function () {
 		const { actionRepository, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordActionsBatch([agent.account.address, [WALK, FEED], [3n, 2n]], { account: owner.account });
+		await actionRepository.write.recordActionsBatch(
+			[
+				[WALK, FEED],
+				[3n, 2n],
+			],
+			{ account: owner.account }
+		);
 
-		const totals = await actionRepository.read.totalActions([agent.account.address]);
+		const totals = await actionRepository.read.totalActions([owner.account.address]);
 		expect(totals).to.equal(5n);
 	});
 
 	it("evaluates activity ratio correctly", async function () {
-		const { actionRepository, activityChecker, owner, agent } = await deployFixture();
+		const { actionRepository, activityChecker, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordAction([agent.account.address, WALK, 6n], { account: owner.account });
+		await actionRepository.write.recordAction([WALK, 6n], { account: owner.account });
 
-		const curNonces = await activityChecker.read.getMultisigNonces([agent.account.address]);
+		const curNonces = await activityChecker.read.getMultisigNonces([owner.account.address]);
 		const lastNonces = [curNonces[0] - 4n, 1n];
 		const ts = 12n;
 
@@ -67,25 +73,17 @@ describe("Pet staking flow", function () {
 	});
 
 	it("fails the ratio check when agent inactive or throughput too low", async function () {
-		const { actionRepository, activityChecker, owner, agent } = await deployFixture();
+		const { actionRepository, activityChecker, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordAction([agent.account.address, WALK, 4n], { account: owner.account });
+		await actionRepository.write.recordAction([WALK, 4n], { account: owner.account });
 
-		// Mark agent inactive
-		await actionRepository.write.setAgentStatus([agent.account.address, false], {
-			account: agent.account,
-		});
-
-		const curNonces = await activityChecker.read.getMultisigNonces([agent.account.address]);
+		const curNonces = await activityChecker.read.getMultisigNonces([owner.account.address]);
+		// Test with inactive agent (curNonces[1] = 0)
+		const inactiveNonces = [curNonces[0], 0n];
 		const refLastNonces = [curNonces[0] - 4n, 0n];
-		expect(await activityChecker.read.isRatioPass([curNonces, refLastNonces, 8n])).to.equal(false);
-
-		// Reactivate with no additional actions -> ratio fails due to zero or negative delta
-		await actionRepository.write.setAgentStatus([agent.account.address, true], {
-			account: owner.account,
-		});
+		expect(await activityChecker.read.isRatioPass([inactiveNonces, refLastNonces, 8n])).to.equal(false);
 		const inactiveLast = [curNonces[0], 1n];
-		expect(await activityChecker.read.isRatioPass([curNonces, inactiveLast, 8n])).to.equal(false);
+		expect(await activityChecker.read.isRatioPass([inactiveNonces, inactiveLast, 8n])).to.equal(false);
 
 		// Small positive delta but overly long window keeps ratio below threshold
 		const limitedLast = [curNonces[0] - 1n, 1n];

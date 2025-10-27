@@ -2,24 +2,26 @@
 pragma solidity ^0.8.28;
 
 import {IActionRepository} from "../interfaces/IActionRepository.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @dev Zero address provided where non-zero was expected.
 error ZeroAddress();
 /// @dev Amount value cannot be zero.
 error ZeroAmount();
-/// @dev Operation restricted to the contract owner.
-error NotOwner();
 /// @dev Caller is not allowed to execute the requested action.
 error NotAuthorized();
 /// @dev Input array lengths do not match.
 error ArrayLengthMismatch();
+/// @dev Nonce has already been used.
+error NonceAlreadyUsed();
+/// @dev Signature is invalid.
+error InvalidSignature();
 
 /// @title ActionRepository
 /// @notice Stores per-agent action counters that can be consumed by staking activity checkers.
-contract ActionRepository is IActionRepository {
-    /// @notice Current contract owner.
-    address public owner;
-
+contract ActionRepository is IActionRepository, EIP712, Ownable {
     /// @dev Per agent per action type counters.
     mapping(address => mapping(bytes32 => uint256)) private _actionCounts;
     /// @dev Aggregated action counter per agent across all action types.
@@ -28,79 +30,266 @@ contract ActionRepository is IActionRepository {
     mapping(address => uint256) private _lastActionAt;
     /// @dev Current active status reported for an agent.
     mapping(address => bool) private _agentActive;
+    /// @dev Nonces for EIP712 verification. Each action nonce is used only once.
+    mapping(bytes32 => bool) private _actionNoncesUsed;
 
-    /// @notice Emitted whenever contract ownership changes.
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     /// @notice Emitted when an agent action is recorded.
     event ActionRecorded(
         address indexed recorder,
-        address indexed agent,
         bytes32 indexed actionType,
         uint256 amount,
         uint256 totalForAction,
         uint256 totalForAgent
     );
+
     /// @notice Emitted when an agent active status flag is updated.
     event AgentStatusUpdated(address indexed agent, bool active);
 
-    /// @notice Ensures that only the owner can call a function.
-    modifier onlyOwner() {
-        if (msg.sender != owner) {
-            revert NotOwner();
-        }
-        _;
-    }
+    /// @notice Initializes the contract with the owner along with the EIP712 domain separator.
+    /// @param _owner The owner of the contract.
+    constructor(
+        address _owner
+    ) EIP712("PettAIActionVerifier", "1") Ownable(_owner) {}
 
-    /// @notice Reverts when the caller is neither the target agent nor the owner.
-    /// @param agent Address of the agent the call relates to.
-    modifier onlyOwnerOrAgent(address agent) {
-        if (msg.sender != agent && msg.sender != owner) {
-            revert NotAuthorized();
-        }
-        _;
-    }
-
-    /// @param admin Initial owner address.
-    constructor(address admin) {
-        if (admin == address(0)) {
-            revert ZeroAddress();
-        }
-        owner = admin;
-        emit OwnershipTransferred(address(0), admin);
-    }
-
-    /// @notice Transfers contract ownership to a new address.
-    /// @param newOwner Address of the new owner.
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) {
-            revert ZeroAddress();
-        }
-        address previousOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(previousOwner, newOwner);
-    }
-
-    /// @notice Updates the active status flag for an agent.
-    /// @param agent Address of the agent.
-    /// @param active New active status indicator.
-    function setAgentStatus(address agent, bool active) external onlyOwnerOrAgent(agent) {
-        if (agent == address(0)) {
-            revert ZeroAddress();
-        }
-        _agentActive[agent] = active;
-        emit AgentStatusUpdated(agent, active);
-    }
-
-    /// @notice Records an action performed by an agent.
-    /// @param agent Address of the agent whose action is being recorded.
+    /// @notice Records an action performed by the caller.
     /// @param actionType Identifier of the action type.
     /// @param amount Number of actions to add (for example, batch transactions).
     /// @return newActionCount Updated counter for the action type.
-    function recordAction(address agent, bytes32 actionType, uint256 amount)
-        public
-        onlyOwnerOrAgent(agent)
-        returns (uint256 newActionCount)
-    {
+    function recordAction(
+        bytes32 actionType,
+        uint256 amount
+    ) public onlyOwner returns (uint256 newActionCount) {
+        if (msg.sender == address(0)) {
+            revert ZeroAddress();
+        }
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+
+        uint256 updatedActionCount = _actionCounts[msg.sender][actionType] +
+            amount;
+        _actionCounts[msg.sender][actionType] = updatedActionCount;
+        uint256 updatedTotal = _totalActions[msg.sender] + amount;
+        _totalActions[msg.sender] = updatedTotal;
+        _lastActionAt[msg.sender] = block.timestamp;
+        _agentActive[msg.sender] = true;
+
+        emit ActionRecorded(
+            msg.sender,
+            actionType,
+            amount,
+            updatedActionCount,
+            updatedTotal
+        );
+
+        return updatedActionCount;
+    }
+
+    /// @notice Records multiple action types in a single call, useful for syncing batched agent stats.
+    /// @param actionTypes Array of action identifiers.
+    /// @param amounts Array of corresponding action increments.
+    /// @return totalAdded Sum of increments applied across all action types.
+    function recordActionsBatch(
+        bytes32[] calldata actionTypes,
+        uint256[] calldata amounts
+    ) external onlyOwner returns (uint256 totalAdded) {
+        if (msg.sender == address(0)) {
+            revert ZeroAddress();
+        }
+        if (actionTypes.length != amounts.length) {
+            revert ArrayLengthMismatch();
+        }
+
+        uint256 len = actionTypes.length;
+        uint256 newTotal = _totalActions[msg.sender];
+        for (uint256 i = 0; i < len; i++) {
+            uint256 amount = amounts[i];
+            if (amount == 0) {
+                revert ZeroAmount();
+            }
+            bytes32 actionType = actionTypes[i];
+            uint256 updatedActionCount = _actionCounts[msg.sender][actionType] +
+                amount;
+            _actionCounts[msg.sender][actionType] = updatedActionCount;
+            newTotal += amount;
+            emit ActionRecorded(
+                msg.sender,
+                actionType,
+                amount,
+                updatedActionCount,
+                newTotal
+            );
+            totalAdded += amount;
+        }
+
+        if (totalAdded > 0) {
+            _totalActions[msg.sender] = newTotal;
+            _lastActionAt[msg.sender] = block.timestamp;
+            _agentActive[msg.sender] = true;
+        }
+    }
+
+    /// @inheritdoc IActionRepository
+    function totalActions(address agent) external view returns (uint256 total) {
+        return _totalActions[agent];
+    }
+
+    /// @notice Gets the total number of actions recorded for the caller across all action types.
+    /// @return total Total recorded actions for the caller.
+    function totalActions() external view returns (uint256 total) {
+        return _totalActions[msg.sender];
+    }
+
+    /// @inheritdoc IActionRepository
+    function actionCount(
+        address agent,
+        bytes32 actionType
+    ) external view returns (uint256 count) {
+        return _actionCounts[agent][actionType];
+    }
+
+    /// @notice Gets the number of actions of a specific type recorded for the caller.
+    /// @param actionType Identifier of the action type.
+    /// @return count Total recorded actions for the type for the caller.
+    function actionCount(
+        bytes32 actionType
+    ) external view returns (uint256 count) {
+        return _actionCounts[msg.sender][actionType];
+    }
+
+    /// @inheritdoc IActionRepository
+    function lastActionTimestamp(
+        address agent
+    ) external view returns (uint256 timestamp) {
+        return _lastActionAt[agent];
+    }
+
+    /// @notice Gets the timestamp of the last recorded action for the caller.
+    /// @return timestamp Timestamp of the last recorded action for the caller (0 if never recorded).
+    function lastActionTimestamp() external view returns (uint256 timestamp) {
+        return _lastActionAt[msg.sender];
+    }
+
+    /// @inheritdoc IActionRepository
+    function isAgentActive(
+        address agent
+    ) external view returns (bool isActive) {
+        return _agentActive[agent];
+    }
+
+    /// @notice Returns whether the caller is currently marked as active.
+    /// @return isActive Boolean flag designating the active status of the caller.
+    /// @dev This will not exactly match the agent EOA of the agent but it will be the multisig address that will perform the action.
+    function isAgentActive() external view returns (bool isActive) {
+        return _agentActive[msg.sender];
+    }
+
+    // --------------------------
+    // EIP712 Functionality
+    // --------------------------
+
+    /// @notice Typehash for the PetAction struct used in EIP712 signing.
+    bytes32 private constant _PET_ACTION_TYPEHASH =
+        keccak256("PetAction(uint8 action,bytes32 nonce,uint256 timestamp)");
+
+    function DOMAIN_SEPARATOR() external view returns (bytes32) {
+        return _domainSeparatorV4();
+    }
+
+    /// @notice Returns the name of the contract. Needed to facilitate EIP712 verification.
+    function name() external pure returns (string memory) {
+        return "PettAIActionVerifier";
+    }
+
+    /// @notice Returns the version of the contract. Needed to facilitate EIP712 verification.
+    function version() external pure returns (string memory) {
+        return "1";
+    }
+
+    /// @notice Verifies the signature of a PetAction and returns the signer address.
+    /// @param actionId The numeric ID of the action.
+    /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
+    /// @param timestamp The timestamp of when the action was signed.
+    /// @param v ECDSA recovery ID.
+    /// @param r ECDSA signature r value.
+    /// @param s ECDSA signature s value.
+    /// @return signer The address that signed the action.
+    /// @dev This function does not consume the nonce. Use verifyAndConsumeAction for that.
+    function verifyAction(
+        uint8 actionId,
+        bytes32 nonce,
+        uint256 timestamp,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) public view returns (address signer) {
+        bytes32 structHash = keccak256(
+            abi.encode(_PET_ACTION_TYPEHASH, actionId, nonce, timestamp)
+        );
+
+        bytes32 hash = _hashTypedDataV4(structHash);
+
+        signer = ECDSA.recover(hash, v, r, s);
+        return signer;
+    }
+
+    /// @notice Verifies the signature of a PetAction, consumes the nonce, and records the action.
+    /// @param actionId The numeric ID of the action.
+    /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
+    /// @param timestamp The timestamp of when the action was signed.
+    /// @param signer The address that is expected to have signed the action.
+    /// @param v ECDSA recovery ID.
+    /// @param r ECDSA signature r value.
+    /// @param s ECDSA signature s value.
+    /// @return newActionCount Updated counter for the action type.
+    /// @dev This function will revert if the signature is invalid or the nonce was already used.
+    function verifyAndConsumeAction(
+        uint8 actionId,
+        bytes32 nonce,
+        uint256 timestamp,
+        address signer,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external returns (uint256 newActionCount) {
+        // Check if nonce has been used
+        if (_actionNoncesUsed[nonce]) {
+            revert NonceAlreadyUsed();
+        }
+
+        // Verify signature
+        address recoveredSigner = verifyAction(
+            actionId,
+            nonce,
+            timestamp,
+            v,
+            r,
+            s
+        );
+        if (recoveredSigner != signer) {
+            revert InvalidSignature();
+        }
+
+        // Mark nonce as used
+        _actionNoncesUsed[nonce] = true;
+
+        // Convert actionId to bytes32 for storage
+        bytes32 actionType = bytes32(uint256(actionId));
+
+        // Record the action
+        return recordActionAs(actionType, 1, signer);
+    }
+
+    /// @notice Records an action on behalf of another address (internal helper).
+    /// @param actionType Identifier of the action type.
+    /// @param amount Number of actions to add.
+    /// @param agent The address to record the action for.
+    /// @return newActionCount Updated counter for the action type.
+    function recordActionAs(
+        bytes32 actionType,
+        uint256 amount,
+        address agent
+    ) internal returns (uint256 newActionCount) {
         if (agent == address(0)) {
             revert ZeroAddress();
         }
@@ -115,74 +304,13 @@ contract ActionRepository is IActionRepository {
         _lastActionAt[agent] = block.timestamp;
         _agentActive[agent] = true;
 
-        emit ActionRecorded(msg.sender, agent, actionType, amount, updatedActionCount, updatedTotal);
+        emit ActionRecorded(
+            agent,
+            actionType,
+            amount,
+            updatedActionCount,
+            updatedTotal
+        );
         return updatedActionCount;
-    }
-
-    /// @notice Convenience helper to record an action where the caller is the agent being updated.
-    /// @param actionType Identifier of the action type.
-    /// @param amount Number of actions to add.
-    /// @return newActionCount Updated counter for the action type.
-    function recordActionForSelf(bytes32 actionType, uint256 amount) external returns (uint256 newActionCount) {
-        return recordAction(msg.sender, actionType, amount);
-    }
-
-    /// @notice Records multiple action types in a single call, useful for syncing batched agent stats.
-    /// @param agent Address of the agent whose actions are being recorded.
-    /// @param actionTypes Array of action identifiers.
-    /// @param amounts Array of corresponding action increments.
-    /// @return totalAdded Sum of increments applied across all action types.
-    function recordActionsBatch(address agent, bytes32[] calldata actionTypes, uint256[] calldata amounts)
-        external
-        onlyOwnerOrAgent(agent)
-        returns (uint256 totalAdded)
-    {
-        if (agent == address(0)) {
-            revert ZeroAddress();
-        }
-        if (actionTypes.length != amounts.length) {
-            revert ArrayLengthMismatch();
-        }
-
-        uint256 len = actionTypes.length;
-        uint256 newTotal = _totalActions[agent];
-        for (uint256 i = 0; i < len; i++) {
-            uint256 amount = amounts[i];
-            if (amount == 0) {
-                revert ZeroAmount();
-            }
-            bytes32 actionType = actionTypes[i];
-            uint256 updatedActionCount = _actionCounts[agent][actionType] + amount;
-            _actionCounts[agent][actionType] = updatedActionCount;
-            newTotal += amount;
-            emit ActionRecorded(msg.sender, agent, actionType, amount, updatedActionCount, newTotal);
-            totalAdded += amount;
-        }
-
-        if (totalAdded > 0) {
-            _totalActions[agent] = newTotal;
-            _lastActionAt[agent] = block.timestamp;
-            _agentActive[agent] = true;
-        }
-    }
-
-    /// @inheritdoc IActionRepository
-    function totalActions(address agent) external view returns (uint256 total) {
-        return _totalActions[agent];
-    }
-
-    /// @inheritdoc IActionRepository
-    function actionCount(address agent, bytes32 actionType) external view returns (uint256 count) {
-        return _actionCounts[agent][actionType];
-    }
-
-    /// @inheritdoc IActionRepository
-    function lastActionTimestamp(address agent) external view returns (uint256 timestamp) {
-        return _lastActionAt[agent];
-    }
-
-    /// @inheritdoc IActionRepository
-    function isAgentActive(address agent) external view returns (bool isActive) {
-        return _agentActive[agent];
     }
 }

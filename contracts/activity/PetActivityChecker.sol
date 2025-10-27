@@ -21,7 +21,8 @@ contract PetActivityChecker {
     address public owner;
     /// @notice Repository that stores the counted actions per agent.
     IActionRepository public immutable actionRepository;
-    /// @notice Minimum actions per second requirement expressed with 18 decimals precision.
+    /// @notice Minimum actions per second requirement expressed with 18 decimals precision. In a day, livenessRatio * 86400 is the minimum number of actions required.
+    //! @dev livenessRatio of 12 transactions per day -> 12 * 10^18 / (24 * 60 * 60) =
     uint256 public livenessRatio;
 
     /// @notice Emitted whenever contract ownership changes.
@@ -46,11 +47,7 @@ contract PetActivityChecker {
     /// @param repository Address of the actions repository contract.
     /// @param _livenessRatio Minimum actions per second represented with 18 decimals.
     /// @param _owner Address of the contract owner.
-    constructor(
-        address repository,
-        uint256 _livenessRatio,
-        address _owner
-    ) {
+    constructor(address repository, uint256 _livenessRatio, address _owner) {
         if (repository == address(0)) {
             revert ZeroAddress();
         }

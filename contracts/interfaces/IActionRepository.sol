@@ -13,12 +13,17 @@ interface IActionRepository {
     /// @param agent Address of the agent.
     /// @param actionType Identifier of the action type.
     /// @return count Total recorded actions for the type.
-    function actionCount(address agent, bytes32 actionType) external view returns (uint256 count);
+    function actionCount(
+        address agent,
+        bytes32 actionType
+    ) external view returns (uint256 count);
 
     /// @notice Gets the timestamp of the last recorded action for an agent.
     /// @param agent Address of the agent.
     /// @return timestamp Timestamp of the last recorded action (0 if never recorded).
-    function lastActionTimestamp(address agent) external view returns (uint256 timestamp);
+    function lastActionTimestamp(
+        address agent
+    ) external view returns (uint256 timestamp);
 
     /// @notice Returns whether the agent is currently marked as active.
     /// @param agent Address of the agent.
