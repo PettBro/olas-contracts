@@ -170,8 +170,12 @@ export async function deployContracts(targetNetwork?: NetworkName) {
 		// Set deployer as the default owner of ActionRepository
 		const ownerAddress = resolveAddress(process.env.ACTION_REPOSITORY_OWNER, deployer.account.address, "ACTION_REPOSITORY_OWNER");
 
+		// Set fixed main signer for verified actions
+		const MAIN_SIGNER: Address = "0xA56b71EcdbcCCE621C9E46C63093F7385dFFbCfd";
+
 		console.log("Deploying ActionRepository with owner", ownerAddress);
-		const actionRepository = await viem.deployContract("ActionRepository", [ownerAddress], {
+		console.log("Using main signer", MAIN_SIGNER);
+		const actionRepository = await viem.deployContract("ActionRepository", [ownerAddress, MAIN_SIGNER] as any, {
 			client: { wallet: deployer as any },
 		});
 		console.log("✅ ActionRepository deployed at", actionRepository.address);
@@ -198,6 +202,7 @@ export async function deployContracts(targetNetwork?: NetworkName) {
 		console.log(`👤 Deployer: ${deployer.account.address}`);
 		console.log(`👑 ActionRepository owner: ${ownerAddress}`);
 		console.log(`📦 ActionRepository: ${actionRepository.address}`);
+		console.log(`✍️  ActionRepository main signer: ${MAIN_SIGNER}`);
 		console.log(`🔍 PetActivityChecker: ${activityChecker.address}`);
 		console.log(`👑 PetActivityChecker owner: ${petActivityCheckerOwner}`);
 		console.log(`⚡ Liveness ratio: ${livenessRatio.toString()}`);

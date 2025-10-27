@@ -13,7 +13,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 	async function deployFixture() {
 		const [owner, agent1, agent2] = await viem.getWalletClients();
 
-		const actionRepository = await viem.deployContract("ActionRepository", [], {});
+		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address, owner.account.address] as any, {});
 
 		return { actionRepository, owner, agent1, agent2 };
 	}
@@ -32,7 +32,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 
 			expect(actionCount).to.equal(5n);
 			expect(totalActions).to.equal(5n);
-			expect(lastActionTimestamp).to.be.greaterThan(0n);
+			expect(Number(lastActionTimestamp)).to.be.greaterThan(0);
 			expect(isActive).to.equal(true);
 		});
 
@@ -74,7 +74,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 				await actionRepository.write.recordAction([WALK, 0n], { account: agent1.account });
 				expect.fail("Expected transaction to revert");
 			} catch (error) {
-				expect(error.message).to.include("ZeroAmount");
+				expect((error as any).message).to.include("ZeroAmount");
 			}
 		});
 
@@ -118,7 +118,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 				await actionRepository.write.recordActionsBatch([actionTypes, amounts], { account: agent1.account });
 				expect.fail("Expected transaction to revert");
 			} catch (error) {
-				expect(error.message).to.include("ArrayLengthMismatch");
+				expect((error as any).message).to.include("ArrayLengthMismatch");
 			}
 		});
 
@@ -132,7 +132,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 				await actionRepository.write.recordActionsBatch([actionTypes, amounts], { account: agent1.account });
 				expect.fail("Expected transaction to revert");
 			} catch (error) {
-				expect(error.message).to.include("ZeroAmount");
+				expect((error as any).message).to.include("ZeroAmount");
 			}
 		});
 
@@ -184,7 +184,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 
 			await actionRepository.write.recordAction([WALK, 5n], { account: agent1.account });
 
-			const total = await actionRepository.read.totalActions([], { account: agent1.account });
+			const total = await (actionRepository.read as any).totalActions([], { account: agent1.account });
 			expect(total).to.equal(5n);
 		});
 	});
@@ -237,8 +237,8 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 			const afterTime = BigInt(Math.floor(Date.now() / 1000)) + 60n; // Add 60 second buffer
 
 			const timestamp = await actionRepository.read.lastActionTimestamp([agent1.account.address]);
-			expect(timestamp).to.be.greaterThanOrEqual(beforeTime);
-			expect(timestamp).to.be.lessThanOrEqual(afterTime);
+			expect(Number(timestamp)).to.be.greaterThanOrEqual(Number(beforeTime));
+			expect(Number(timestamp)).to.be.lessThanOrEqual(Number(afterTime));
 		});
 
 		it("should work with msg.sender overload", async function () {
@@ -246,8 +246,8 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 
 			await actionRepository.write.recordAction([WALK, 1n], { account: agent1.account });
 
-			const timestamp = await actionRepository.read.lastActionTimestamp([], { account: agent1.account });
-			expect(timestamp).to.be.greaterThan(0n);
+			const timestamp = await (actionRepository.read as any).lastActionTimestamp([], { account: agent1.account });
+			expect(Number(timestamp)).to.be.greaterThan(0);
 		});
 	});
 
@@ -273,7 +273,7 @@ describe.skip("ActionRepository (legacy direct record)", function () {
 
 			await actionRepository.write.recordAction([WALK, 1n], { account: agent1.account });
 
-			const isActive = await actionRepository.read.isAgentActive([], { account: agent1.account });
+			const isActive = await (actionRepository.read as any).isAgentActive([], { account: agent1.account });
 			expect(isActive).to.equal(true);
 		});
 	});
@@ -356,12 +356,12 @@ async function signPetAction(walletClient: WalletClient, verifyingContract: `0x$
 		],
 	} as const;
 	const message = { action: actionId, nonce: msgNonce, timestamp: msgTimestamp } as const;
-	const signature: `0x${string}` = await walletClient.signTypedData({ domain, types, primaryType: "PetAction", message });
+	const signature: `0x${string}` = await walletClient.signTypedData({ account: walletClient.account!, domain, types, primaryType: "PetAction", message } as any);
 	const r = ("0x" + signature.slice(2, 66)) as `0x${string}`;
 	const s = ("0x" + signature.slice(66, 130)) as `0x${string}`;
 	let v = parseInt(signature.slice(130, 132), 16);
 	if (v < 27) v += 27;
-	return { v, r, s, nonce: msgNonce, timestamp: msgTimestamp, signerAddress: walletClient.account.address };
+	return { v, r, s, nonce: msgNonce, timestamp: msgTimestamp, signerAddress: walletClient.account!.address };
 }
 
 describe("ActionRepository (verified-only)", function () {
@@ -372,14 +372,15 @@ describe("ActionRepository (verified-only)", function () {
 
 	async function deployFixture() {
 		const [owner, agent1, agent2] = await viem.getWalletClients();
-		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address], {});
+		// Set main signer to agent1 for verified action tests
+		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address, agent1.account.address], {});
 		return { actionRepository, owner, agent1, agent2 };
 	}
 
 	it("increments via verifyAndConsumeAction", async function () {
 		const { actionRepository, agent1 } = await deployFixture();
 		const signed = await signPetAction(agent1, actionRepository.address, ACTION1_ID, padHex("0xaaaa", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, signed.nonce, signed.timestamp, signed.signerAddress, signed.v, signed.r, signed.s]);
+		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, signed.nonce, signed.timestamp, signed.v, signed.r, signed.s]);
 		const c = await actionRepository.read.actionCount([agent1.account.address, ACTION1_TYPE]);
 		expect(c).to.equal(1n);
 	});
@@ -388,10 +389,10 @@ describe("ActionRepository (verified-only)", function () {
 		const { actionRepository, agent1 } = await deployFixture();
 		const nonce = padHex("0x55", { size: 32 });
 		const s1 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, nonce);
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s1.nonce, s1.timestamp, s1.signerAddress, s1.v, s1.r, s1.s]);
+		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s1.nonce, s1.timestamp, s1.v, s1.r, s1.s]);
 		const s2 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, nonce);
 		try {
-			await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s2.nonce, s2.timestamp, s2.signerAddress, s2.v, s2.r, s2.s]);
+			await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s2.nonce, s2.timestamp, s2.v, s2.r, s2.s]);
 			expect.fail("Expected NonceAlreadyUsed");
 		} catch (e: any) {
 			expect(e.message).to.include("NonceAlreadyUsed");
@@ -399,10 +400,12 @@ describe("ActionRepository (verified-only)", function () {
 	});
 
 	it("rejects signer mismatch", async function () {
-		const { actionRepository, agent1, agent2 } = await deployFixture();
+		const [owner, agent1, agent2] = await viem.getWalletClients();
+		// Deploy with mainSigner set to agent2, but sign with agent1
+		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address, agent2.account.address], {});
 		const s = await signPetAction(agent1, actionRepository.address, ACTION1_ID);
 		try {
-			await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s.nonce, s.timestamp, agent2.account.address, s.v, s.r, s.s]);
+			await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s]);
 			expect.fail("Expected InvalidSignature");
 		} catch (e: any) {
 			expect(e.message).to.include("InvalidSignature");
@@ -412,11 +415,11 @@ describe("ActionRepository (verified-only)", function () {
 	it("tallies multiple verified actions and types", async function () {
 		const { actionRepository, agent1 } = await deployFixture();
 		const s1 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, padHex("0x1111", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s1.nonce, s1.timestamp, s1.signerAddress, s1.v, s1.r, s1.s]);
+		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s1.nonce, s1.timestamp, s1.v, s1.r, s1.s]);
 		const s2 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, padHex("0x2222", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s2.nonce, s2.timestamp, s2.signerAddress, s2.v, s2.r, s2.s]);
+		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s2.nonce, s2.timestamp, s2.v, s2.r, s2.s]);
 		const s3 = await signPetAction(agent1, actionRepository.address, ACTION2_ID, padHex("0x3333", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION2_ID, s3.nonce, s3.timestamp, s3.signerAddress, s3.v, s3.r, s3.s]);
+		await actionRepository.write.verifyAndConsumeAction([ACTION2_ID, s3.nonce, s3.timestamp, s3.v, s3.r, s3.s]);
 		const c1 = await actionRepository.read.actionCount([agent1.account.address, ACTION1_TYPE]);
 		const c2 = await actionRepository.read.actionCount([agent1.account.address, ACTION2_TYPE]);
 		const total = await actionRepository.read.totalActions([agent1.account.address]);
@@ -448,10 +451,10 @@ describe("ActionRepository (verified-only)", function () {
 		const { actionRepository, agent1 } = await deployFixture();
 		const before = BigInt(Math.floor(Date.now() / 1000));
 		const s = await signPetAction(agent1, actionRepository.address, ACTION1_ID);
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s.nonce, s.timestamp, s.signerAddress, s.v, s.r, s.s]);
+		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s]);
 		const after = BigInt(Math.floor(Date.now() / 1000)) + 60n;
 		const ts = await actionRepository.read.lastActionTimestamp([agent1.account.address]);
-		expect(ts).to.be.greaterThanOrEqual(before);
-		expect(ts).to.be.lessThanOrEqual(after);
+		expect(Number(ts)).to.be.greaterThanOrEqual(Number(before));
+		expect(Number(ts)).to.be.lessThanOrEqual(Number(after));
 	});
 });

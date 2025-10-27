@@ -12,7 +12,7 @@ describe("Pet staking flow", function () {
 	async function deployFixture() {
 		const [owner, agent] = await viem.getWalletClients();
 
-		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address], {});
+		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address, owner.account.address] as any, {});
 
 		const livenessRatio = 5n * 10n ** 17n; // 0.5 actions per second
 
