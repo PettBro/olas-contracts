@@ -32,6 +32,8 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
     mapping(address => bool) private _agentActive;
     /// @dev Nonces for EIP712 verification. Each action nonce is used only once.
     mapping(bytes32 => bool) private _actionNoncesUsed;
+    /// @dev Address of the private key that signed the action.
+    address public mainSigner;
 
     /// @notice Emitted when an agent action is recorded.
     event ActionRecorded(
@@ -45,11 +47,21 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
     /// @notice Emitted when an agent active status flag is updated.
     event AgentStatusUpdated(address indexed agent, bool active);
 
+    /// @notice Emitted when the signer is changed.
+    event MainSignerChanged(address indexed newSigner);
+
     /// @notice Initializes the contract with the owner along with the EIP712 domain separator.
     /// @param _owner The owner of the contract.
+    /// @param _signer The signer of the contract.
     constructor(
-        address _owner
-    ) EIP712("PettAIActionVerifier", "1") Ownable(_owner) {}
+        address _owner,
+        address _signer
+    ) EIP712("PettAIActionVerifier", "1") Ownable(_owner) {
+        if (_signer == address(0)) {
+            revert ZeroAddress();
+        }
+        mainSigner = _signer;
+    }
 
     /// @notice Records an action performed by the caller.
     /// @param actionType Identifier of the action type.
@@ -222,22 +234,20 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) public view returns (address signer) {
+    ) public view returns (address) {
         bytes32 structHash = keccak256(
             abi.encode(_PET_ACTION_TYPEHASH, actionId, nonce, timestamp)
         );
 
         bytes32 hash = _hashTypedDataV4(structHash);
 
-        signer = ECDSA.recover(hash, v, r, s);
-        return signer;
+        return ECDSA.recover(hash, v, r, s);
     }
 
     /// @notice Verifies the signature of a PetAction, consumes the nonce, and records the action.
     /// @param actionId The numeric ID of the action.
     /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
     /// @param timestamp The timestamp of when the action was signed.
-    /// @param signer The address that is expected to have signed the action.
     /// @param v ECDSA recovery ID.
     /// @param r ECDSA signature r value.
     /// @param s ECDSA signature s value.
@@ -247,7 +257,6 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
         uint8 actionId,
         bytes32 nonce,
         uint256 timestamp,
-        address signer,
         uint8 v,
         bytes32 r,
         bytes32 s
@@ -261,7 +270,7 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
             r,
             s
         );
-        if (recoveredSigner != signer) {
+        if (recoveredSigner != mainSigner) {
             revert InvalidSignature();
         }
 
@@ -269,7 +278,7 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
         bytes32 actionType = bytes32(uint256(actionId));
 
         // Record the action
-        return recordActionAs(actionType, 1, signer);
+        return recordActionAs(actionType, 1, mainSigner);
     }
 
     /// @notice Records an action on behalf of another address (internal helper).
@@ -313,5 +322,16 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
 
         _actionNoncesUsed[nonce] = true;
         return nonce;
+    }
+
+    function _changeMainSigner(
+        address newSigner
+    ) private onlyOwner returns (bool) {
+        if (newSigner == address(0)) {
+            revert ZeroAddress();
+        }
+        mainSigner = newSigner;
+        emit MainSignerChanged(newSigner);
+        return true;
     }
 }
