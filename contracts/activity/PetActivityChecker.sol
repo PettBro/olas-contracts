@@ -22,7 +22,8 @@ contract PetActivityChecker {
     /// @notice Repository that stores the counted actions per agent.
     IActionRepository public immutable actionRepository;
     /// @notice Minimum actions per second requirement expressed with 18 decimals precision. In a day, livenessRatio * 86400 is the minimum number of actions required.
-    //! @dev livenessRatio of 12 transactions per day -> 12 * 10^18 / (24 * 60 * 60) =
+
+    //! @dev let's go for a low livenessRatio of 24 transactions per day -> 24 * 10^18 / (24 * 60 * 60) ~= 277777777777778
     uint256 public livenessRatio;
 
     /// @notice Emitted whenever contract ownership changes.

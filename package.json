@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "hardhat test nodejs"
+    "test": "hardhat test nodejs",
+    "deploy:local": "hardhat run --network anvil scripts/deploy-base-mainnet.ts",
+    "deploy:base": "hardhat run --network baseMainnet scripts/deploy-base-mainnet.ts",
+    "deploy:both": "node scripts/deploy-both.js"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition": "^3.0.3",

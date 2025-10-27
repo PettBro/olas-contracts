@@ -1,15 +1,13 @@
 import { network } from "hardhat";
 import { isAddress } from "viem";
 import type { WalletClient } from "viem";
+import { pathToFileURL } from "url";
 
 type Address = `0x${string}`;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" satisfies Address;
 
-const OPTIONAL_ENV_VARS_HELP =
-	"Optional variables:\n" +
-	"  ACTION_REPOSITORY_OWNER - Owner address for ActionRepository (defaults to deployer)\n" +
-	"  PET_ACTIVITY_CHECKER_OWNER - Owner address for PetActivityChecker (defaults to deployer)";
+const OPTIONAL_ENV_VARS_HELP = "Optional variables:\n" + "  ACTION_REPOSITORY_OWNER - Owner address for ActionRepository (defaults to deployer)\n" + "  PET_ACTIVITY_CHECKER_OWNER - Owner address for PetActivityChecker (defaults to deployer)";
 
 const ENV_VAR_DESCRIPTIONS: Record<string, string> = {
 	PET_LIVENESS_RATIO: "Minimum actions per second (18 decimals precision)",
@@ -27,6 +25,12 @@ const NETWORK_CONFIG = {
 		requiredEnvVars: ["PET_LIVENESS_RATIO"] as const,
 		description: "Local Anvil dev chain",
 	},
+	// Local L1 simulator inside Hardhat (no external node needed)
+	hardhatMainnet: {
+		chainType: "l1",
+		requiredEnvVars: ["PET_LIVENESS_RATIO"] as const,
+		description: "Hardhat local L1 simulator",
+	},
 	hardhatOp: {
 		chainType: "op",
 		requiredEnvVars: ["PET_LIVENESS_RATIO"] as const,
@@ -42,14 +46,12 @@ function isSupportedNetwork(networkName: string): networkName is NetworkName {
 	return networkName in NETWORK_CONFIG;
 }
 
-function resolveTargetNetwork() {
-	const envNetwork = process.env.DEPLOY_NETWORK ?? process.env.HARDHAT_NETWORK ?? DEFAULT_NETWORK;
+function resolveTargetNetwork(override?: NetworkName) {
+	const envNetwork = override ?? (process.env.DEPLOY_NETWORK as NetworkName | undefined) ?? (process.env.HARDHAT_NETWORK as NetworkName | undefined) ?? DEFAULT_NETWORK;
 
 	if (!isSupportedNetwork(envNetwork)) {
 		const supportedNetworks = Object.keys(NETWORK_CONFIG).join(", ");
-		throw new Error(
-			`Unsupported network "${envNetwork}". Set DEPLOY_NETWORK to one of: ${supportedNetworks}`,
-		);
+		throw new Error(`Unsupported network "${String(envNetwork)}". Set DEPLOY_NETWORK to one of: ${supportedNetworks}`);
 	}
 
 	return { name: envNetwork, chainType: NETWORK_CONFIG[envNetwork].chainType };
@@ -70,12 +72,7 @@ function validateEnvironmentVariables(networkName: NetworkName): void {
 	const missingVars = requiredVars.filter((varName) => !process.env[varName]);
 
 	if (missingVars.length > 0) {
-		throw new Error(
-			`Missing required environment variables for ${networkName}: ${missingVars.join(", ")}\n` +
-				`Required variables:\n` +
-				`${formatRequiredVars(requiredVars)}\n\n` +
-				OPTIONAL_ENV_VARS_HELP,
-		);
+		throw new Error(`Missing required environment variables for ${networkName}: ${missingVars.join(", ")}\n` + `Required variables:\n` + `${formatRequiredVars(requiredVars)}\n\n` + OPTIONAL_ENV_VARS_HELP);
 	}
 
 	// Validate PET_LIVENESS_RATIO is a positive number
@@ -148,9 +145,9 @@ function selectDeployer(walletClients: WalletClient[]): WalletClient {
 }
 
 // Main deployment function with error handling
-async function deployContracts() {
+export async function deployContracts(targetNetwork?: NetworkName) {
 	try {
-		const { name: networkName, chainType } = resolveTargetNetwork();
+		const { name: networkName, chainType } = resolveTargetNetwork(targetNetwork);
 
 		// Validate environment variables before proceeding
 		validateEnvironmentVariables(networkName);
@@ -213,5 +210,7 @@ async function deployContracts() {
 	}
 }
 
-// Execute deployment
-await deployContracts();
+// Execute only when invoked directly (not when imported)
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+	await deployContracts();
+}
