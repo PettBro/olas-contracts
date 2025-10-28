@@ -101,41 +101,48 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
 
     /// @notice Records multiple action types in a single call with signature verification, useful for syncing batched agent stats.
     /// @param actionIds Array of action identifiers.
-    /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
-    /// @param timestamp The timestamp of when the action was signed.
-    /// @param v ECDSA recovery ID.
-    /// @param r ECDSA signature r value.
-    /// @param s ECDSA signature s value.
+    /// @param nonces Array of nonces, one per action.
+    /// @param timestamps Array of timestamps, one per action.
+    /// @param vs Array of ECDSA recovery IDs, one per action.
+    /// @param rs Array of ECDSA signature r values, one per action.
+    /// @param ss Array of ECDSA signature s values, one per action.
     /// @return totalAdded Sum of increments applied across all action types.
     function recordActionsBatch(
         uint8[] calldata actionIds,
-        bytes32 nonce,
-        uint256 timestamp,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        bytes32[] calldata nonces,
+        uint256[] calldata timestamps,
+        uint8[] calldata vs,
+        bytes32[] calldata rs,
+        bytes32[] calldata ss
     ) external returns (uint256 totalAdded) {
-        // Verify signature
-        address recoveredSigner = verifyAction(
-            actionIds[0], // Use first action ID for signature verification
-            _useNonce(nonce), // Mark nonce as used
-            timestamp,
-            v,
-            r,
-            s
-        );
-        if (recoveredSigner != mainSigner) {
-            revert InvalidSignature();
+        uint256 len = actionIds.length;
+        if (
+            len != nonces.length ||
+            len != timestamps.length ||
+            len != vs.length ||
+            len != rs.length ||
+            len != ss.length
+        ) {
+            revert ArrayLengthMismatch();
         }
 
-        uint256 len = actionIds.length;
         for (uint256 i = 0; i < len; i++) {
-            // Convert uint8 actionId to bytes32 for storage
-            bytes32 actionType = bytes32(uint256(actionIds[i]));
-            recordActionAs(actionType, 1, msg.sender);
-            totalAdded += 1;
+            if (
+                verifyAction(
+                    actionIds[i],
+                    _useNonce(nonces[i]),
+                    timestamps[i],
+                    vs[i],
+                    rs[i],
+                    ss[i]
+                ) != mainSigner
+            ) {
+                revert InvalidSignature();
+            }
+
+            recordActionAs(bytes32(uint256(actionIds[i])), 1, msg.sender);
         }
-        return totalAdded;
+        return len;
     }
 
     /// @inheritdoc IActionRepository

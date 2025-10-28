@@ -76,10 +76,10 @@ describe("Pet staking flow", function () {
 	it("allows the owner to batch update action counts", async function () {
 		const { actionRepository, agent, owner } = await deployFixture();
 
-		// Batch 3x action1 and 2x action2
+		// Batch 3x action1 and 2x action2 with per-item signatures
 		const actionIds = [ACTION1_ID, ACTION1_ID, ACTION1_ID, ACTION2_ID, ACTION2_ID];
-		const s = await signPetAction(owner, actionRepository.address, actionIds[0]);
-		await actionRepository.write.recordActionsBatch([actionIds, s.nonce, s.timestamp, s.v, s.r, s.s], { account: owner.account });
+		const sigs = await Promise.all(actionIds.map((aid, i) => signPetAction(owner, actionRepository.address, aid, padHex(`0x${(0x6000 + i).toString(16)}`, { size: 32 }))));
+		await (actionRepository.write as any).recordActionsBatch([actionIds, sigs.map((s) => s.nonce), sigs.map((s) => s.timestamp), sigs.map((s) => s.v), sigs.map((s) => s.r), sigs.map((s) => s.s)], { account: owner.account });
 
 		const totals = await actionRepository.read.totalActions([owner.account.address]);
 		expect(totals).to.equal(5n);
