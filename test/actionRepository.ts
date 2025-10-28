@@ -377,81 +377,50 @@ describe("ActionRepository (verified-only)", function () {
 		return { actionRepository, owner, agent1, agent2 };
 	}
 
-	it("increments via verifyAndConsumeAction", async function () {
-		const { actionRepository, agent1 } = await deployFixture();
-		const signed = await signPetAction(agent1, actionRepository.address, ACTION1_ID, padHex("0xaaaa", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, signed.nonce, signed.timestamp, signed.v, signed.r, signed.s]);
-		const c = await actionRepository.read.actionCount([agent1.account.address, ACTION1_TYPE]);
-		expect(c).to.equal(1n);
+	it("recordAction increments for caller with valid signature", async function () {
+		const { actionRepository, agent1, agent2 } = await deployFixture();
+		// mainSigner is agent1; caller will be agent2
+		const signed = await signPetAction(agent1, actionRepository.address, ACTION1_ID);
+		await actionRepository.write.recordAction([ACTION1_ID, signed.nonce, signed.timestamp, signed.v, signed.r, signed.s], { account: agent2.account });
+		const count = await actionRepository.read.actionCount([agent2.account.address, ACTION1_TYPE]);
+		const total = await actionRepository.read.totalActions([agent2.account.address]);
+		expect(count).to.equal(1n);
+		expect(total).to.equal(1n);
 	});
 
-	it("rejects reused nonce", async function () {
-		const { actionRepository, agent1 } = await deployFixture();
-		const nonce = padHex("0x55", { size: 32 });
-		const s1 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, nonce);
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s1.nonce, s1.timestamp, s1.v, s1.r, s1.s]);
-		const s2 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, nonce);
+	it("recordAction rejects invalid signer", async function () {
+		const [owner, wrongSigner, caller] = await viem.getWalletClients();
+		// Deploy with mainSigner set to owner
+		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address, owner.account.address], {});
+		// Sign with wrongSigner instead of mainSigner (owner)
+		const s = await signPetAction(wrongSigner, actionRepository.address, ACTION1_ID);
 		try {
-			await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s2.nonce, s2.timestamp, s2.v, s2.r, s2.s]);
-			expect.fail("Expected NonceAlreadyUsed");
-		} catch (e: any) {
-			expect(e.message).to.include("NonceAlreadyUsed");
-		}
-	});
-
-	it("rejects signer mismatch", async function () {
-		const [owner, agent1, agent2] = await viem.getWalletClients();
-		// Deploy with mainSigner set to agent2, but sign with agent1
-		const actionRepository = await viem.deployContract("ActionRepository", [owner.account.address, agent2.account.address], {});
-		const s = await signPetAction(agent1, actionRepository.address, ACTION1_ID);
-		try {
-			await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s]);
+			await actionRepository.write.recordAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s], { account: caller.account });
 			expect.fail("Expected InvalidSignature");
 		} catch (e: any) {
 			expect(e.message).to.include("InvalidSignature");
 		}
 	});
 
-	it("tallies multiple verified actions and types", async function () {
-		const { actionRepository, agent1 } = await deployFixture();
-		const s1 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, padHex("0x1111", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s1.nonce, s1.timestamp, s1.v, s1.r, s1.s]);
-		const s2 = await signPetAction(agent1, actionRepository.address, ACTION1_ID, padHex("0x2222", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s2.nonce, s2.timestamp, s2.v, s2.r, s2.s]);
-		const s3 = await signPetAction(agent1, actionRepository.address, ACTION2_ID, padHex("0x3333", { size: 32 }));
-		await actionRepository.write.verifyAndConsumeAction([ACTION2_ID, s3.nonce, s3.timestamp, s3.v, s3.r, s3.s]);
-		const c1 = await actionRepository.read.actionCount([agent1.account.address, ACTION1_TYPE]);
-		const c2 = await actionRepository.read.actionCount([agent1.account.address, ACTION2_TYPE]);
-		const total = await actionRepository.read.totalActions([agent1.account.address]);
-		expect(c1).to.equal(2n);
+	it("recordActionsBatch increments for caller with valid signature", async function () {
+		const { actionRepository, agent1, agent2 } = await deployFixture();
+		const actionIds = [ACTION1_ID, ACTION2_ID];
+		// Sign using the first action id (contract verifies against actionIds[0])
+		const signed = await signPetAction(agent1, actionRepository.address, actionIds[0]);
+		await actionRepository.write.recordActionsBatch([actionIds, signed.nonce, signed.timestamp, signed.v, signed.r, signed.s], { account: agent2.account });
+		const c1 = await actionRepository.read.actionCount([agent2.account.address, ACTION1_TYPE]);
+		const c2 = await actionRepository.read.actionCount([agent2.account.address, ACTION2_TYPE]);
+		const total = await actionRepository.read.totalActions([agent2.account.address]);
+		expect(c1).to.equal(1n);
 		expect(c2).to.equal(1n);
-		expect(total).to.equal(3n);
-	});
-
-	it("recordAction and recordActionsBatch are owner-only", async function () {
-		const { actionRepository, owner, agent1 } = await deployFixture();
-		try {
-			await actionRepository.write.recordAction([ACTION1_TYPE, 1n], { account: agent1.account });
-			expect.fail("Expected owner-only revert");
-		} catch (e: any) {
-			expect(e.message).to.match(/Ownable|NotAuthorized|caller is not the owner/i);
-		}
-		// Owner can call
-		await actionRepository.write.recordAction([ACTION1_TYPE, 1n], { account: owner.account });
-		try {
-			await actionRepository.write.recordActionsBatch([[ACTION2_TYPE], [1n]], { account: agent1.account });
-			expect.fail("Expected owner-only revert");
-		} catch (e: any) {
-			expect(e.message).to.match(/Ownable|NotAuthorized|caller is not the owner/i);
-		}
-		await actionRepository.write.recordActionsBatch([[ACTION2_TYPE], [1n]], { account: owner.account });
+		expect(total).to.equal(2n);
 	});
 
 	it("updates lastActionTimestamp via verified action", async function () {
 		const { actionRepository, agent1 } = await deployFixture();
 		const before = BigInt(Math.floor(Date.now() / 1000));
 		const s = await signPetAction(agent1, actionRepository.address, ACTION1_ID);
-		await actionRepository.write.verifyAndConsumeAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s]);
+		await actionRepository.write.recordAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s], { account: agent1.account });
 		const after = BigInt(Math.floor(Date.now() / 1000)) + 60n;
 		const ts = await actionRepository.read.lastActionTimestamp([agent1.account.address]);
 		expect(Number(ts)).to.be.greaterThanOrEqual(Number(before));

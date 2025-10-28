@@ -1,13 +1,43 @@
 import { expect } from "chai";
 import { network } from "hardhat";
 import { padHex, stringToHex } from "viem";
+import type { WalletClient } from "viem";
 import { describe, it } from "node:test";
 
 const { viem } = await network.connect();
 
+async function signPetAction(walletClient: WalletClient, verifyingContract: `0x${string}`, actionId: number, nonce?: `0x${string}`, timestamp?: bigint) {
+	const publicClient = await viem.getPublicClient();
+	const chainId = await publicClient.getChainId();
+	const msgNonce = nonce ?? padHex("0x1234", { size: 32 });
+	const msgTimestamp = timestamp ?? BigInt(Math.floor(Date.now() / 1000));
+	const domain = {
+		name: "PettAIActionVerifier",
+		version: "1",
+		chainId,
+		verifyingContract,
+	} as const;
+	const types = {
+		PetAction: [
+			{ name: "action", type: "uint8" },
+			{ name: "nonce", type: "bytes32" },
+			{ name: "timestamp", type: "uint256" },
+		],
+	} as const;
+	const message = { action: actionId, nonce: msgNonce, timestamp: msgTimestamp } as const;
+	const signature: `0x${string}` = await walletClient.signTypedData({ account: walletClient.account!, domain, types, primaryType: "PetAction", message } as any);
+	const r = ("0x" + signature.slice(2, 66)) as `0x${string}`;
+	const s = ("0x" + signature.slice(66, 130)) as `0x${string}`;
+	let v = parseInt(signature.slice(130, 132), 16);
+	if (v < 27) v += 27;
+	return { v, r, s, nonce: msgNonce, timestamp: msgTimestamp };
+}
+
 describe("Pet staking flow", function () {
-	const WALK = padHex(stringToHex("walk"), { size: 32 });
-	const FEED = padHex(stringToHex("feed"), { size: 32 });
+	const ACTION1_ID = 1;
+	const ACTION2_ID = 2;
+	const ACTION1_TYPE = padHex("0x01", { size: 32 });
+	const ACTION2_TYPE = padHex("0x02", { size: 32 });
 
 	async function deployFixture() {
 		const [owner, agent] = await viem.getWalletClients();
@@ -24,11 +54,18 @@ describe("Pet staking flow", function () {
 	it("tracks per-action counters and totals", async function () {
 		const { actionRepository, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordAction([WALK, 2n], { account: owner.account });
-		await actionRepository.write.recordAction([FEED, 1n], { account: owner.account });
+		// Owner is mainSigner and caller; sign two actions of type 1 and one of type 2
+		for (let i = 0; i < 2; i++) {
+			const s = await signPetAction(owner, actionRepository.address, ACTION1_ID, padHex(`0x${(0x3000 + i).toString(16)}`, { size: 32 }));
+			await actionRepository.write.recordAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s], { account: owner.account });
+		}
+		{
+			const s = await signPetAction(owner, actionRepository.address, ACTION2_ID, padHex("0x4000", { size: 32 }));
+			await actionRepository.write.recordAction([ACTION2_ID, s.nonce, s.timestamp, s.v, s.r, s.s], { account: owner.account });
+		}
 
-		const walkCount = await actionRepository.read.actionCount([owner.account.address, WALK]);
-		const feedCount = await actionRepository.read.actionCount([owner.account.address, FEED]);
+		const walkCount = await actionRepository.read.actionCount([owner.account.address, ACTION1_TYPE]);
+		const feedCount = await actionRepository.read.actionCount([owner.account.address, ACTION2_TYPE]);
 		const total = await actionRepository.read.totalActions([owner.account.address]);
 
 		expect(walkCount).to.equal(2n);
@@ -39,13 +76,10 @@ describe("Pet staking flow", function () {
 	it("allows the owner to batch update action counts", async function () {
 		const { actionRepository, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordActionsBatch(
-			[
-				[WALK, FEED],
-				[3n, 2n],
-			],
-			{ account: owner.account }
-		);
+		// Batch 3x action1 and 2x action2
+		const actionIds = [ACTION1_ID, ACTION1_ID, ACTION1_ID, ACTION2_ID, ACTION2_ID];
+		const s = await signPetAction(owner, actionRepository.address, actionIds[0]);
+		await actionRepository.write.recordActionsBatch([actionIds, s.nonce, s.timestamp, s.v, s.r, s.s], { account: owner.account });
 
 		const totals = await actionRepository.read.totalActions([owner.account.address]);
 		expect(totals).to.equal(5n);
@@ -54,7 +88,10 @@ describe("Pet staking flow", function () {
 	it("evaluates activity ratio correctly", async function () {
 		const { actionRepository, activityChecker, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordAction([WALK, 6n], { account: owner.account });
+		for (let i = 0; i < 6; i++) {
+			const s = await signPetAction(owner, actionRepository.address, ACTION1_ID, padHex(`0x${(0x1000 + i).toString(16)}`, { size: 32 }));
+			await actionRepository.write.recordAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s], { account: owner.account });
+		}
 
 		const curNonces = await activityChecker.read.getMultisigNonces([owner.account.address]);
 		const lastNonces = [curNonces[0] - 4n, 1n];
@@ -75,7 +112,10 @@ describe("Pet staking flow", function () {
 	it("fails the ratio check when agent inactive or throughput too low", async function () {
 		const { actionRepository, activityChecker, agent, owner } = await deployFixture();
 
-		await actionRepository.write.recordAction([WALK, 4n], { account: owner.account });
+		for (let i = 0; i < 4; i++) {
+			const s = await signPetAction(owner, actionRepository.address, ACTION1_ID, padHex(`0x${(0x2000 + i).toString(16)}`, { size: 32 }));
+			await actionRepository.write.recordAction([ACTION1_ID, s.nonce, s.timestamp, s.v, s.r, s.s], { account: owner.account });
+		}
 
 		const curNonces = await activityChecker.read.getMultisigNonces([owner.account.address]);
 		// Test with inactive agent (curNonces[1] = 0)

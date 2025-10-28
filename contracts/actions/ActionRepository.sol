@@ -63,82 +63,79 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
         mainSigner = _signer;
     }
 
-    /// @notice Records an action performed by the caller.
-    /// @param actionType Identifier of the action type.
-    /// @param amount Number of actions to add (for example, batch transactions).
+    /// @notice Records an action performed by the caller with signature verification.
+    /// @param actionId The numeric ID of the action.
+    /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
+    /// @param timestamp The timestamp of when the action was signed.
+    /// @param v ECDSA recovery ID.
+    /// @param r ECDSA signature r value.
+    /// @param s ECDSA signature s value.
     /// @return newActionCount Updated counter for the action type.
     function recordAction(
-        bytes32 actionType,
-        uint256 amount
-    ) public onlyOwner returns (uint256 newActionCount) {
-        if (msg.sender == address(0)) {
-            revert ZeroAddress();
-        }
-        if (amount == 0) {
-            revert ZeroAmount();
-        }
-
-        uint256 updatedActionCount = _actionCounts[msg.sender][actionType] +
-            amount;
-        _actionCounts[msg.sender][actionType] = updatedActionCount;
-        uint256 updatedTotal = _totalActions[msg.sender] + amount;
-        _totalActions[msg.sender] = updatedTotal;
-        _lastActionAt[msg.sender] = block.timestamp;
-        _agentActive[msg.sender] = true;
-
-        emit ActionRecorded(
-            msg.sender,
-            actionType,
-            amount,
-            updatedActionCount,
-            updatedTotal
+        uint8 actionId,
+        bytes32 nonce,
+        uint256 timestamp,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) public returns (uint256 newActionCount) {
+        // Verify signature
+        address recoveredSigner = verifyAction(
+            actionId,
+            _useNonce(nonce), // Mark nonce as used
+            timestamp,
+            v,
+            r,
+            s
         );
+        if (recoveredSigner != mainSigner) {
+            revert InvalidSignature();
+        }
 
-        return updatedActionCount;
+        // Convert uint8 actionId to bytes32 for storage
+        bytes32 actionType = bytes32(uint256(actionId));
+
+        // Delegate recording logic to internal helper
+        return recordActionAs(actionType, 1, msg.sender);
     }
 
-    /// @notice Records multiple action types in a single call, useful for syncing batched agent stats.
-    /// @param actionTypes Array of action identifiers.
-    /// @param amounts Array of corresponding action increments.
+    /// @notice Records multiple action types in a single call with signature verification, useful for syncing batched agent stats.
+    /// @param actionIds Array of action identifiers.
+    /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
+    /// @param timestamp The timestamp of when the action was signed.
+    /// @param v ECDSA recovery ID.
+    /// @param r ECDSA signature r value.
+    /// @param s ECDSA signature s value.
     /// @return totalAdded Sum of increments applied across all action types.
     function recordActionsBatch(
-        bytes32[] calldata actionTypes,
-        uint256[] calldata amounts
-    ) external onlyOwner returns (uint256 totalAdded) {
-        if (msg.sender == address(0)) {
-            revert ZeroAddress();
-        }
-        if (actionTypes.length != amounts.length) {
-            revert ArrayLengthMismatch();
+        uint8[] calldata actionIds,
+        bytes32 nonce,
+        uint256 timestamp,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external returns (uint256 totalAdded) {
+        // Verify signature
+        address recoveredSigner = verifyAction(
+            actionIds[0], // Use first action ID for signature verification
+            _useNonce(nonce), // Mark nonce as used
+            timestamp,
+            v,
+            r,
+            s
+        );
+        if (recoveredSigner != mainSigner) {
+            revert InvalidSignature();
         }
 
-        uint256 len = actionTypes.length;
-        uint256 newTotal = _totalActions[msg.sender];
+        uint256 len = actionIds.length;
         for (uint256 i = 0; i < len; i++) {
-            uint256 amount = amounts[i];
-            if (amount == 0) {
-                revert ZeroAmount();
-            }
-            bytes32 actionType = actionTypes[i];
-            uint256 updatedActionCount = _actionCounts[msg.sender][actionType] +
-                amount;
-            _actionCounts[msg.sender][actionType] = updatedActionCount;
-            newTotal += amount;
-            emit ActionRecorded(
-                msg.sender,
-                actionType,
-                amount,
-                updatedActionCount,
-                newTotal
-            );
-            totalAdded += amount;
+            // Convert uint8 actionId to bytes32 for storage
+            bytes32 actionType = bytes32(uint256(actionIds[i]));
+            recordActionAs(actionType, 1, msg.sender);
+            totalAdded += 1;
         }
-
-        if (totalAdded > 0) {
-            _totalActions[msg.sender] = newTotal;
-            _lastActionAt[msg.sender] = block.timestamp;
-            _agentActive[msg.sender] = true;
-        }
+        return totalAdded;
     }
 
     /// @inheritdoc IActionRepository
@@ -242,43 +239,6 @@ contract ActionRepository is IActionRepository, EIP712, Ownable {
         bytes32 hash = _hashTypedDataV4(structHash);
 
         return ECDSA.recover(hash, v, r, s);
-    }
-
-    /// @notice Verifies the signature of a PetAction, consumes the nonce, and records the action.
-    /// @param actionId The numeric ID of the action.
-    /// @param nonce The nonce of the action (should be keccak256 of a string on the server side).
-    /// @param timestamp The timestamp of when the action was signed.
-    /// @param v ECDSA recovery ID.
-    /// @param r ECDSA signature r value.
-    /// @param s ECDSA signature s value.
-    /// @return newActionCount Updated counter for the action type.
-    /// @dev This function will revert if the signature is invalid or the nonce was already used.
-    function verifyAndConsumeAction(
-        uint8 actionId,
-        bytes32 nonce,
-        uint256 timestamp,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external returns (uint256 newActionCount) {
-        // Verify signature
-        address recoveredSigner = verifyAction(
-            actionId,
-            _useNonce(nonce), // Mark nonce as used
-            timestamp,
-            v,
-            r,
-            s
-        );
-        if (recoveredSigner != mainSigner) {
-            revert InvalidSignature();
-        }
-
-        // Convert uint8 actionId to bytes32 for storage
-        bytes32 actionType = bytes32(uint256(actionId));
-
-        // Record the action
-        return recordActionAs(actionType, 1, mainSigner);
     }
 
     /// @notice Records an action on behalf of another address (internal helper).
